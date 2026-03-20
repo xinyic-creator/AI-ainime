@@ -51,7 +51,7 @@
 
     <div v-else class="flex h-screen overflow-hidden">
         <aside class="w-64 glass-card m-4 mr-0 flex flex-col shadow-2xl">
-            <div class="p-10"><h1 class="text-xl font-black text-white">AI动漫部数据看板</h1></div>
+            <div class="p-10"><h1 class="text-xl font-black text-white">ANIME CLOUD</h1></div>
             <nav class="flex-1 px-4 space-y-1">
                 <button v-for="p in platforms" :key="p" @click="currentPlatform = p; currentPage = 'dashboard'"
                         :class="['nav-item w-full px-6 py-4 rounded-xl text-left text-sm uppercase flex justify-between items-center', currentPlatform === p && currentPage === 'dashboard' ? 'active' : 'text-slate-500 hover:text-white']">
@@ -139,12 +139,10 @@
             let platformChart, detailChart;
 
             // ==========================================
-            // 请在此处填写你的 GitHub 信息
-            // ==========================================
-            const GH_OWNER = "xinyic"; 
-            const GH_REPO = "AI-anime";
+            const GH_OWNER = "xinyic-creator";
+            const GH_REPO = "AI-ainime";
             const GH_FILE = "data.json";
-            const FIXED_KEY = "aidongman"; // 统一的加密/解密密码
+            const FIXED_KEY = "aidongman";
             // ==========================================
 
             // 从 GitHub 读取并解密
@@ -155,7 +153,6 @@
                     const res = await fetch(url);
                     if (res.ok) {
                         const cloudData = await res.json();
-                        // 尝试解密
                         if (cloudData.encrypted) {
                             const bytes = CryptoJS.AES.decrypt(cloudData.encrypted, FIXED_KEY);
                             const decryptedStr = bytes.toString(CryptoJS.enc.Utf8);
@@ -163,7 +160,7 @@
                                 rawData.value = JSON.parse(decryptedStr);
                             }
                         } else {
-                            rawData.value = cloudData; // 兼容旧的不加密数据
+                            rawData.value = cloudData;
                         }
                     }
                 } catch (e) {
@@ -173,43 +170,77 @@
                 }
             };
 
-            // 加密并推送
+            // 加密并推送（修复版）
             const syncToGithub = async () => {
                 if (!rawData.value.length) return alert("请先上传本地数据");
-                const token = localStorage.getItem('gh_token') || prompt("请输入 GitHub Token:");
-                if (!token) return;
-                localStorage.setItem('gh_token', token);
-                isLoading.value = true;
 
+                // 每次都重新询问 token，避免缓存坏 token 导致静默失败
+                let token = localStorage.getItem('gh_token');
+                if (!token) {
+                    token = prompt("请输入 GitHub Personal Access Token:");
+                    if (!token) return;
+                    localStorage.setItem('gh_token', token);
+                }
+
+                isLoading.value = true;
                 try {
                     const url = `https://api.github.com/repos/${GH_OWNER}/${GH_REPO}/contents/${GH_FILE}`;
                     let sha = "";
-                    const getRes = await fetch(url, { headers: { Authorization: `token ${token}` } });
+
+                    const getRes = await fetch(url, {
+                        headers: { Authorization: `token ${token}` }
+                    });
+
+                    // Token 无效：清缓存并提示重试
+                    if (getRes.status === 401) {
+                        localStorage.removeItem('gh_token');
+                        alert("❌ Token 无效或已过期，请重新点击按钮并输入正确的 Token");
+                        isLoading.value = false;
+                        return;
+                    }
+
+                    // 403：权限不足
+                    if (getRes.status === 403) {
+                        alert("❌ Token 权限不足，请确保 Token 勾选了 repo 完整权限");
+                        isLoading.value = false;
+                        return;
+                    }
+
+                    // 文件已存在，取 sha 用于更新
                     if (getRes.ok) {
                         const getData = await getRes.json();
                         sha = getData.sha;
                     }
 
-                    // AES 加密逻辑
+                    // AES 加密
                     const jsonStr = JSON.stringify(rawData.value);
                     const encryptedData = CryptoJS.AES.encrypt(jsonStr, FIXED_KEY).toString();
                     const payload = { encrypted: encryptedData };
-                    
                     const content = btoa(unescape(encodeURIComponent(JSON.stringify(payload))));
+
+                    const body = {
+                        message: `Secure Update ${new Date().toLocaleString()}`,
+                        content: content,
+                    };
+                    if (sha) body.sha = sha;
+
                     const putRes = await fetch(url, {
                         method: 'PUT',
-                        headers: { Authorization: `token ${token}`, 'Content-Type': 'application/json' },
-                        body: JSON.stringify({
-                            message: `Secure Update ${new Date().toLocaleString()}`,
-                            content: content,
-                            sha: sha
-                        })
+                        headers: {
+                            Authorization: `token ${token}`,
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify(body)
                     });
 
-                    if (putRes.ok) alert("加密同步成功！");
-                    else alert("同步失败");
+                    if (putRes.ok) {
+                        alert("✅ 加密同步成功！");
+                    } else {
+                        const errData = await putRes.json();
+                        alert("❌ 同步失败: " + (errData.message || putRes.status));
+                    }
                 } catch (e) {
-                    alert("错误: " + e.message);
+                    alert("❌ 错误: " + e.message);
                 } finally {
                     isLoading.value = false;
                 }
@@ -313,7 +344,6 @@
 
             watch([startDate, endDate, currentPlatform, currentPage, rawData], updateCharts);
             
-            // 只要一挂载，就开始去尝试抓取和解密云端数据
             onMounted(() => { fetchFromCloud(); });
 
             const checkLogin = () => { if (loginCode.value === "aidongman") isLoggedIn.value = true; };
