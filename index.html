@@ -1,0 +1,327 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI动漫部 | 业务数据云看板</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;900&display=swap" rel="stylesheet">
+    <style>
+        body { font-family: 'Inter', sans-serif; background: #080d17; color: #f8fafc; overflow: hidden; }
+        .glass-card { background: rgba(15, 23, 42, 0.6); backdrop-filter: blur(12px); border: 1px solid rgba(255, 255, 255, 0.05); border-radius: 1.5rem; }
+        .btn-primary { background: linear-gradient(135deg, #3b82f6 0%, #8b5cf6 100%); transition: all 0.3s ease; }
+        .nav-item { transition: all 0.2s ease; border-left: 4px solid transparent; }
+        .nav-item.active { background: rgba(59, 130, 246, 0.1); border-left-color: #3b82f6; color: #3b82f6; font-weight: 700; }
+        
+        table { width: 100%; border-spacing: 0 8px; border-collapse: separate; }
+        th { color: #475569; font-weight: 700; text-transform: uppercase; font-size: 0.7rem; padding: 1.25rem; text-align: left; letter-spacing: 0.15em; }
+        td { padding: 1.5rem; background: rgba(30, 41, 59, 0.3); }
+        td:first-child { border-radius: 1.25rem 0 0 1.25rem; }
+        td:last-child { border-radius: 0 1.25rem 1.25rem 0; }
+        tr:hover td { background: rgba(51, 65, 85, 0.5); cursor: pointer; }
+
+        .date-picker-container { @apply flex items-center bg-slate-900/90 border border-white/10 rounded-2xl px-6 py-3 gap-6 shadow-2xl; }
+        input[type="date"] { @apply bg-transparent outline-none text-blue-400 font-black text-xl cursor-pointer; color-scheme: dark; }
+
+        /* 加载动画 */
+        .loading-overlay { background: rgba(8, 13, 23, 0.9); backdrop-filter: blur(8px); z-index: 100; position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; flex-direction: column; }
+        .spinner { width: 40px; height: 40px; border: 4px solid rgba(59, 130, 246, 0.1); border-top-color: #3b82f6; border-radius: 50%; animation: spin 1s linear infinite; }
+        @keyframes spin { to { transform: rotate(360deg); } }
+    </style>
+</head>
+<body>
+
+<div id="app">
+    <div v-if="isLoading" class="loading-overlay">
+        <div class="spinner mb-4"></div>
+        <p class="text-xs font-black uppercase tracking-widest text-blue-500">Syncing with Cloud Database...</p>
+    </div>
+
+    <div v-if="!isLoggedIn" class="flex items-center justify-center h-screen bg-slate-950">
+        <div class="glass-card p-12 w-full max-w-sm text-center">
+            <h2 class="text-2xl font-black mb-10 uppercase text-white tracking-widest">Access Control</h2>
+            <input v-model="loginCode" @keyup.enter="checkLogin" type="password" placeholder="••••••" 
+                   class="w-full bg-black/40 border border-white/10 p-5 rounded-2xl mb-6 text-center tracking-[0.8em] outline-none focus:border-blue-500 transition-all text-white">
+            <button @click="checkLogin" class="w-full btn-primary text-white py-5 rounded-2xl font-bold uppercase tracking-widest">Login</button>
+        </div>
+    </div>
+
+    <div v-else class="flex h-screen overflow-hidden">
+        <aside class="w-64 glass-card m-4 mr-0 flex flex-col shadow-2xl">
+            <div class="p-10"><h1 class="text-xl font-black text-white">ANIME CLOUD</h1></div>
+            <nav class="flex-1 px-4 space-y-1">
+                <button v-for="p in platforms" :key="p" @click="currentPlatform = p; currentPage = 'dashboard'"
+                        :class="['nav-item w-full px-6 py-4 rounded-xl text-left text-sm uppercase flex justify-between items-center', currentPlatform === p && currentPage === 'dashboard' ? 'active' : 'text-slate-500 hover:text-white']">
+                    {{ p }}
+                </button>
+            </nav>
+            <div class="p-6 border-t border-white/5 space-y-3">
+                <button @click="syncToGithub" class="w-full bg-emerald-500/10 py-4 rounded-xl border border-dashed border-emerald-500/40 text-emerald-500 text-[10px] font-black uppercase tracking-widest hover:bg-emerald-500/20 transition-all">
+                    Push To Cloud
+                </button>
+                <div @click="verifyAdminUpload" class="bg-blue-600/5 p-4 rounded-xl border border-dashed border-blue-500/30 hover:border-blue-500 transition-all cursor-pointer text-center group">
+                    <div class="text-[10px] text-blue-500 font-black uppercase tracking-widest">Local Import</div>
+                    <input type="file" ref="fileInput" @change="handleFileUpload" accept=".xlsx, .xls" class="hidden">
+                </div>
+            </div>
+        </aside>
+
+        <main class="flex-1 p-8 overflow-y-auto">
+            <header class="flex justify-between items-center mb-10">
+                <h2 class="text-4xl font-black tracking-tighter text-white uppercase">{{ currentPage === 'dashboard' ? currentPlatform : selectedWork.name }}</h2>
+                <div class="date-picker-container">
+                    <input type="date" v-model="startDate">
+                    <div class="w-px h-8 bg-white/10"></div>
+                    <input type="date" v-model="endDate">
+                </div>
+            </header>
+
+            <div v-if="currentPage === 'dashboard'" class="space-y-8">
+                <div class="glass-card p-10 bg-gradient-to-br from-blue-600/10 to-transparent">
+                    <p class="text-[10px] text-slate-500 font-black uppercase tracking-widest mb-2">Total Views</p>
+                    <h3 class="text-8xl font-black text-white tracking-tighter">{{ totalViews.toLocaleString() }}</h3>
+                </div>
+
+                <div class="glass-card p-8">
+                    <p class="text-[10px] text-slate-500 font-black uppercase tracking-widest mb-6">Daily Trend Analysis</p>
+                    <div class="h-64"><canvas id="platformChart"></canvas></div>
+                </div>
+
+                <div class="glass-card p-8">
+                    <table class="min-w-full">
+                        <thead>
+                            <tr><th>Work Title</th><th>Release Date</th><th class="text-right">Period Views</th></tr>
+                        </thead>
+                        <tbody>
+                            <tr v-for="item in tableData" :key="item.id" @click="goToDetail(item)">
+                                <td class="font-bold text-white text-lg">{{ item.name }}</td>
+                                <td class="text-slate-500 font-mono text-sm">{{ item.onlineDate }}</td>
+                                <td class="font-black text-blue-400 text-2xl text-right">{{ item.views.toLocaleString() }}</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <div v-if="currentPage === 'detail'" class="space-y-8">
+                <button @click="currentPage = 'dashboard'" class="text-xs text-slate-500 font-bold uppercase hover:text-white flex items-center gap-2">← Back</button>
+                <div class="glass-card p-10 bg-blue-500/5">
+                    <p class="text-[10px] text-blue-400 font-black uppercase mb-2">Work Period Total</p>
+                    <h3 class="text-8xl font-black text-white tracking-tighter">{{ selectedWorkPeriodTotal.toLocaleString() }}</h3>
+                </div>
+                <div class="glass-card p-10 h-[500px]">
+                    <div class="h-[380px]"><canvas id="detailChart"></canvas></div>
+                </div>
+            </div>
+        </main>
+    </div>
+</div>
+
+<script>
+    const { createApp, ref, computed, nextTick, watch, onMounted } = Vue;
+
+    createApp({
+        setup() {
+            const isLoggedIn = ref(false);
+            const loginCode = ref("");
+            const isLoading = ref(true);
+            const fileInput = ref(null);
+            const currentPage = ref('dashboard');
+            const currentPlatform = ref('汇总');
+            const platforms = ['汇总', '抖音', '红果', '腾讯视频', '爱奇艺', '优酷'];
+            const startDate = ref("2026-02-01");
+            const endDate = ref("2026-03-31");
+            const rawData = ref([]); 
+            const selectedWork = ref(null);
+            let platformChart, detailChart;
+
+            // ==========================================
+            // 请在此处填写你的 GitHub 信息
+            // ==========================================
+            const GH_OWNER = "xinyic-creator"; 
+            const GH_REPO = "AI-ainime";
+            const GH_FILE = "data.json"; // 存储数据的文件名
+            // ==========================================
+
+            // 从 GitHub 读取数据 (所有人可见)
+            const fetchFromCloud = async () => {
+                isLoading.value = true;
+                try {
+                    // 使用 raw.githubusercontent 绕过缓存
+                    const url = `https://raw.githubusercontent.com/${GH_OWNER}/${GH_REPO}/main/${GH_FILE}?t=${Date.now()}`;
+                    const res = await fetch(url);
+                    if (res.ok) {
+                        rawData.value = await res.json();
+                    }
+                } catch (e) {
+                    console.log("No cloud data found yet.");
+                } finally {
+                    isLoading.value = false;
+                }
+            };
+
+            // 推送数据到 GitHub (仅限管理员使用 Token)
+            const syncToGithub = async () => {
+                if (!rawData.value.length) return alert("请先上传本地数据再同步");
+                
+                const token = localStorage.getItem('gh_token') || prompt("请输入你的 GitHub Token (仅需输入一次):");
+                if (!token) return;
+                localStorage.setItem('gh_token', token);
+
+                const url = `https://api.github.com/repos/${GH_OWNER}/${GH_REPO}/contents/${GH_FILE}`;
+                
+                // 1. 先尝试获取旧文件的 SHA (更新文件必须)
+                let sha = "";
+                const getRes = await fetch(url, { headers: { Authorization: `token ${token}` } });
+                if (getRes.ok) {
+                    const getData = await getRes.json();
+                    sha = getData.sha;
+                }
+
+                // 2. 上传新数据
+                const content = btoa(unescape(encodeURIComponent(JSON.stringify(rawData.value))));
+                const putRes = await fetch(url, {
+                    method: 'PUT',
+                    headers: { Authorization: `token ${token}`, 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        message: `Dashboard Update ${new Date().toLocaleString()}`,
+                        content: content,
+                        sha: sha
+                    })
+                });
+
+                if (putRes.ok) alert("云端同步成功！全公司现在可以看到最新数据了。");
+                else {
+                    alert("同步失败，请检查 Token 权限或用户名/仓库名设置。");
+                    localStorage.removeItem('gh_token');
+                }
+            };
+
+            const formatExcelDate = (val) => {
+                if (!val) return '待补充';
+                if (typeof val === 'number') {
+                    const date = new Date(Math.round((val - 25569) * 86400 * 1000));
+                    return date.toISOString().split('T')[0];
+                }
+                return String(val).split(' ')[0].replace(/\//g, '-');
+            };
+
+            const processJSONData = (data) => {
+                return data.map(row => ({
+                    id: row.id || row.name,
+                    name: row.name || '',
+                    date: formatExcelDate(row.date),
+                    onlineDate: formatExcelDate(row.issue_date || row.online_date),
+                    dyView: parseInt(row.dy_view || row.df_view || 0),
+                    hgView: parseInt(row.hg_view || 0),
+                    txView: parseInt(row.tx_view || 0),
+                    iqiyiView: parseInt(row.iqiyi_view || 0),
+                    ykView: parseInt(row.yk_view || 0)
+                }));
+            };
+
+            const getRowValue = (row) => {
+                const p = currentPlatform.value;
+                if (p === '汇总') return row.dyView + row.hgView + row.txView + row.iqiyiView + row.ykView;
+                if (p === '抖音') return row.dyView;
+                if (p === '红果') return row.hgView;
+                if (p === '腾讯视频') return row.txView;
+                if (p === '爱奇艺') return row.iqiyiView;
+                if (p === '优酷') return row.ykView;
+                return 0;
+            };
+
+            const tableData = computed(() => {
+                const map = {};
+                rawData.value.forEach(row => {
+                    if (row.date >= startDate.value && row.date <= endDate.value) {
+                        if (!map[row.id]) map[row.id] = { id: row.id, name: row.name, views: 0, onlineDate: row.onlineDate };
+                        map[row.id].views += getRowValue(row);
+                    }
+                });
+                return Object.values(map).sort((a,b) => b.views - a.views);
+            });
+
+            const totalViews = computed(() => tableData.value.reduce((s, i) => s + i.views, 0));
+            const selectedWorkPeriodTotal = computed(() => {
+                if (!selectedWork.value) return 0;
+                return rawData.value
+                    .filter(r => r.id === selectedWork.value.id && r.date >= startDate.value && r.date <= endDate.value)
+                    .reduce((s, r) => s + getRowValue(r), 0);
+            });
+
+            const renderChart = (id, labels, data, instance) => {
+                const ctx = document.getElementById(id);
+                if (!ctx || !labels.length) return null;
+                if (instance) instance.destroy();
+                return new Chart(ctx, {
+                    type: 'line',
+                    data: {
+                        labels,
+                        datasets: [{
+                            data, borderColor: '#3b82f6', backgroundColor: 'rgba(59, 130, 246, 0.05)',
+                            fill: true, tension: 0.4, borderWidth: 3, pointRadius: 2
+                        }]
+                    },
+                    options: {
+                        responsive: true, maintainAspectRatio: false,
+                        plugins: { legend: { display: false } },
+                        scales: { 
+                            y: { grid: { color: 'rgba(255,255,255,0.03)' }, ticks: { color: '#475569' } }, 
+                            x: { grid: { display: false }, ticks: { color: '#475569' } } 
+                        }
+                    }
+                });
+            };
+
+            const updateCharts = async () => {
+                await nextTick();
+                if (currentPage.value === 'dashboard') {
+                    const daily = {};
+                    rawData.value.forEach(r => {
+                        if (r.date >= startDate.value && r.date <= endDate.value) {
+                            daily[r.date] = (daily[r.date] || 0) + getRowValue(r);
+                        }
+                    });
+                    const keys = Object.keys(daily).sort();
+                    platformChart = renderChart('platformChart', keys, keys.map(k => daily[k]), platformChart);
+                } else if (currentPage.value === 'detail' && selectedWork.value) {
+                    const history = rawData.value
+                        .filter(r => r.id === selectedWork.value.id && r.date >= startDate.value && r.date <= endDate.value)
+                        .sort((a,b) => a.date.localeCompare(b.date));
+                    detailChart = renderChart('detailChart', history.map(r => r.date), history.map(getRowValue), detailChart);
+                }
+            };
+
+            watch([startDate, endDate, currentPlatform, currentPage, rawData], updateCharts);
+            
+            onMounted(() => { fetchFromCloud(); });
+
+            const checkLogin = () => { if (loginCode.value === "aidongman") isLoggedIn.value = true; };
+            const handleFileUpload = (event) => {
+                const file = event.target.files[0];
+                const reader = new FileReader();
+                reader.onload = (e) => {
+                    const workbook = XLSX.read(new Uint8Array(e.target.result), { type: 'array' });
+                    const jsonData = XLSX.utils.sheet_to_json(workbook.Sheets[workbook.SheetNames[0]]);
+                    rawData.value = processJSONData(jsonData);
+                };
+                reader.readAsArrayBuffer(file);
+            };
+            const verifyAdminUpload = () => { if (prompt("ADMIN PWD:") === "guanliyuan") fileInput.value.click(); };
+            const goToDetail = (work) => { selectedWork.value = work; currentPage.value = 'detail'; };
+
+            return {
+                isLoggedIn, loginCode, checkLogin, platforms, currentPlatform, isLoading,
+                startDate, endDate, rawData, tableData, totalViews,
+                currentPage, selectedWork, goToDetail, handleFileUpload,
+                verifyAdminUpload, fileInput, selectedWorkPeriodTotal, syncToGithub
+            }
+        }
+    }).mount('#app')
+</script>
+</body>
+</html>
